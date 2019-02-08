@@ -1,0 +1,44 @@
+{
+  "name": "switchboardJS",
+  "version": "0.0.1",
+  "private": true,
+  "dependencies": {
+    "dotenv": "^6.2.0",
+    "uuid": "^3.3.2",
+    "websocket": "^1.0.28"
+  },
+  "devDependencies": {
+    "babel-cli": "^6.26.0",
+    "babel-core": "^6.26.3",
+    "babel-plugin-transform-object-rest-spread": "^6.26.0",
+    "babel-polyfill": "^6.26.0",
+    "babel-preset-env": "^1.7.0",
+    "babel-register": "^6.26.0",
+    "eslint": "^5.13.0",
+    "node-fetch": "^2.3.0",
+    "nodemon": "^1.18.9",
+    "sinon": "^7.2.3",
+    "tape": "^4.9.2"
+  },
+  "scripts": {
+    "babel": "./node_modules/.bin/babel",
+    "babel-node": "./node_modules/.bin/babel-node",
+    "start": "nodemon server.js --exec babel-node",
+    "test": "babel-node test/index.js"
+  },
+  "babel": {
+    "presets": [
+      [
+        "env",
+        {
+          "targets": {
+            "node": "current"
+          }
+        }
+      ]
+    ],
+    "plugins": [
+      "transform-object-rest-spread"
+    ]
+  }
+}
