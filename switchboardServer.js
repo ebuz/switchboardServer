@@ -2,6 +2,31 @@
 
 import uuid from 'uuid/v3';
 
+const initiateDialogue = (initiator) => {
+    try{
+        if(initiator.status !== 'inDialogue'){
+            console.log('Initiating dialogue...');
+            initiator.peers.forEach((p, _) => {
+                console.log(`Notifying peer ${p.id}`);
+                p.status = 'inDialogue';
+                p.connection.sendUTF(JSON.stringify({
+                    type: 'initiateDialogue',
+                    initiator: false,
+                }));
+            });
+            initiator.status = 'inDialogue';
+            initiator.connection.sendUTF(JSON.stringify({
+                type: 'initiateDialogue',
+                initiator: true,
+            }));
+        } else {
+            console.log('Already in dialogue');
+        }
+    } catch (err) {
+        console.log('Initiating dialogue failed ' + err);
+    }
+};
+
 const relaySignal = server => (signal, receiverId, senderId) => {
     try{
         server.clientsById.get(receiverId).connection.sendUTF(JSON.stringify({
@@ -10,9 +35,10 @@ const relaySignal = server => (signal, receiverId, senderId) => {
             from: senderId
         }));
     } catch (err) {
-        console.log(`Relaying signal to ${receiverId} failed` + err);
+        console.log(`Relaying signal to ${receiverId} failed ` + err);
     }
 };
+
 const shuffle = (array) => {
     let currentIndex = array.length, temporaryValue, randomIndex;
 
@@ -100,15 +126,27 @@ const serverAction = server => action => {
             action.client.status = 'signaling';
             break;
         case 'relaySignalToPeer':
-            console.log(`Client ${action.client.id} sharing signaling`);
+            console.log(`Client ${action.client.id} sharing signaling with ${action.receivingPeer}`);
             action.client.signalingData = action.signal;
             //relay signals
             relaySignal(server)(action.signal,
-                action.recevingPeer, action.client.id);
+                action.receivingPeer, action.client.id);
             break;
         case 'peerFound':
             console.log(`Client ${action.client.id} has peer`);
             action.client.status = 'peerd';
+            try{
+                action.client.peers.add(server.clientsById.get(action.peerId));
+            } catch (err) {
+                console.log('Client peer is missing');
+                action.client.connection.sendUTF(JSON.stringify({
+                    type: 'badPeerId',
+                }));
+            }
+            break;
+        case 'initiateDialogue':
+            console.log(`Client ${action.client.id} asking to initiate dialogue`);
+            initiateDialogue(action.client);
             break;
         default:
             console.log(`unknown action ${action.type}`);
@@ -126,7 +164,7 @@ const onConnectionMessage = server => client => message => {
                     type: 'acknowledgement',
                     message: 'ok'
                 }));
-            } catch (err){
+            } catch (err) {
                 console.log(`unparsable message from ${client.id}, invalid action ${message.utf8Data}` + err);
                 if(client.connection){
                     client.connection.sendUTF(JSON.stringify({
@@ -155,7 +193,7 @@ const onRequest = server => (request) => {
         console.log((new Date()) + ' Connection accepted.');
         server.connections.add(newConnection);
         server.clients.add(newClient);
-        server.clientsById[newClient.id] = newClient;
+        server.clientsById.set(newClient.id, newClient);
         newClient.rooms.forEach(room => {
             console.log((new Date()) + ` adding client to room ${room}.`);
             if(server.rooms.has(room)){
@@ -164,6 +202,10 @@ const onRequest = server => (request) => {
                 server.rooms.set(room, new Set([newClient]));
             }
         });
+        newConnection.sendUTF(JSON.stringify({
+            type: 'serverId',
+            serverId: newClient.id
+        }));
         newConnection.on('message', onConnectionMessage(server)(newClient));
         // newConnection.on('error', onConnectionError);
     }
@@ -172,12 +214,15 @@ const onRequest = server => (request) => {
 const onClose = server => (connection, reasonCode, description) => {
     console.log(`${new Date()} Connection ${connection.remoteAddress} disconnected (${reasonCode}: ${description})`);
     let connectionKey = SwitchboardServer.genConnectionKey(connection);
-    let client = server.clientsById[connectionKey];
+    let client = server.clientsById.get(connectionKey);
     server.connections.delete(connection);
     server.clientsById.delete(connectionKey);
     server.clients.delete(client);
     client.rooms.forEach((room) => {
         server.rooms.get(room).delete(client);
+        if(server.rooms.get(room).size === 0 && room !== '_lobby'){
+            server.rooms.delete(room);
+        }
     });
 };
 
@@ -198,7 +243,7 @@ class SwitchboardServer {
 
     static genConnectionKey(connection) {
         let socket = connection.socket;
-        return socket.remoteAddress + socket.remotePort;
+        return `${socket.remoteAddress}${socket.remotePort}`;
     }
 
     static createClient(request, connection) {
@@ -207,7 +252,7 @@ class SwitchboardServer {
             id: SwitchboardServer.genConnectionKey(connection),
             rooms: new Set(['_lobby', uuid(request.resource, uuid.URL)]),
             selfId: null,
-            status: 'holding', //'peerd', 'signaling', 'requestingPeer', 'sentCandidatePeer'
+            status: 'holding', //'peerd', 'signaling', 'requestingPeer', 'sentCandidatePeer', 'inDialogue'
             peeringConstraints: null,
             signalingData: null,
             peers: new Set(),
