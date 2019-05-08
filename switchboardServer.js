@@ -1,5 +1,7 @@
 'use strict';
 
+import * as actionTypes from './actionTypes';
+
 import uuid from 'uuid/v3';
 
 const initiateDialogue = (initiator) => {
@@ -30,7 +32,7 @@ const initiateDialogue = (initiator) => {
 const relaySignal = server => (signal, receiverId, senderId) => {
     try{
         server.clientsById.get(receiverId).connection.sendUTF(JSON.stringify({
-            type: 'signal',
+            type: actionTypes.SIGNAL,
             signal: signal,
             from: senderId
         }));
@@ -80,17 +82,21 @@ const filterSet = function* (entries, pred) {
 
 const pairClients = clients => {
     chunk(shuffle(clients), 2).forEach(pair => {
-        if(pair.length === 2){
+        if(pair.length === 2 && !pair[0].unreachable.has(pair[1].id) && !pair[1].unreachable.has(pair[0].id)){
             console.log(`try to pair client ${pair[0].id} and client ${pair[1].id}`);
             pair[0].status = 'sentCandidatePeer';
+            pair[0].signalingData = [];
             pair[0].connection.sendUTF(JSON.stringify({
-                type: 'initiateSignaling',
-                candidatePeerId: pair[1].id
+                type: actionTypes.CANDIDATE_PEER,
+                initiator: true,
+                peerId: pair[1].id
             }));
             pair[1].status = 'sentCandidatePeer';
+            pair[1].signalingData = [];
             pair[1].connection.sendUTF(JSON.stringify({
-                type: 'expectSignaling',
-                candidatePeerId: pair[0].id
+                type: actionTypes.CANDIDATE_PEER,
+                initiator: false,
+                peerId: pair[0].id
             }));
         }
     });
@@ -110,43 +116,51 @@ const peerMatching = server => {
 
 const serverAction = server => action => {
     switch (action.type) {
-        case 'setSelfId':
+        case actionTypes.SELFID:
             console.log(`Setting client selfId to ${action.selfId}`);
             action.client.selfId = action.selfId;
             break;
-        case 'requestPeer':
+        case actionTypes.REQUEST_PEER:
             console.log(`Client ${action.client.id} requesting peer`);
             action.client.status = 'requestingPeer';
             action.client.peeringConstraints = action.peeringConstraints;
             //reconcile requesting clients
             peerMatching(server);
             break;
-        case 'nowSignaling':
+        case actionTypes.PEERING:
             console.log(`Client ${action.client.id} is signaling`);
             action.client.status = 'signaling';
             break;
-        case 'relaySignalToPeer':
+        case actionTypes.RELAY_SIGNAL:
             console.log(`Client ${action.client.id} sharing signaling with ${action.receivingPeer}`);
-            action.client.signalingData = action.signal;
+            action.client.status = 'signaling';
+            action.client.signalingData = [...action.client.signalingData,
+                action.signal];
             //relay signals
             relaySignal(server)(action.signal,
                 action.receivingPeer, action.client.id);
             break;
-        case 'peerFound':
+        case actionTypes.PEERED:
             console.log(`Client ${action.client.id} has peer`);
-            action.client.status = 'peerd';
-            try{
-                action.client.peers.add(server.clientsById.get(action.peerId));
-            } catch (err) {
-                console.log('Client peer is missing');
-                action.client.connection.sendUTF(JSON.stringify({
-                    type: 'badPeerId',
-                }));
-            }
+            action.client.status = 'peered';
+            // try{
+            //     action.client.peers.add(server.clientsById.get(action.peerId));
+            // } catch (err) {
+            //     console.log('Client peer is missing');
+            //     action.client.connection.sendUTF(JSON.stringify({
+            //         type: 'badPeerId',
+            //     }));
+            // }
             break;
-        case 'initiateDialogue':
+        case actionTypes.INITIATE_DIALOGUE:
             console.log(`Client ${action.client.id} asking to initiate dialogue`);
             initiateDialogue(action.client);
+            break;
+        case actionTypes.PEERING_FAILED:
+            action.client.status = 'requestingPeer';
+            action.client.signalingData = [];
+            action.client.unreachable.add(action.peerId);
+            peerMatching(server);
             break;
         default:
             console.log(`unknown action ${action.type}`);
@@ -161,15 +175,15 @@ const onConnectionMessage = server => client => message => {
                 requestedAction.client = client;
                 serverAction(server)(requestedAction);
                 client.connection.sendUTF(JSON.stringify({
-                    type: 'acknowledgement',
+                    type: actionTypes.ACTION_ACKNOWLEDGED,
                     message: 'ok'
                 }));
             } catch (err) {
                 console.log(`unparsable message from ${client.id}, invalid action ${message.utf8Data}` + err);
                 if(client.connection){
                     client.connection.sendUTF(JSON.stringify({
-                        type: 'acknowledgement',
-                        message: 'invalid message'
+                        type: actionTypes.ACTION_FAILED,
+                        message: 'invalid action'
                     }));
                 }
             }
@@ -203,7 +217,7 @@ const onRequest = server => (request) => {
             }
         });
         newConnection.sendUTF(JSON.stringify({
-            type: 'serverId',
+            type: actionTypes.SERVERID,
             serverId: newClient.id
         }));
         newConnection.on('message', onConnectionMessage(server)(newClient));
@@ -256,6 +270,7 @@ class SwitchboardServer {
             peeringConstraints: null,
             signalingData: null,
             peers: new Set(),
+            unreachable: new Set(),
         };
         console.log((new Date()) + ` New client ${newClient.id}, requested ${request.resource}.`);
         return newClient;
