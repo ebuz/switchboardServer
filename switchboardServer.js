@@ -131,6 +131,21 @@ const serverAction = server => action => {
             console.log(`Client ${action.client.id} is signaling`);
             action.client.status = 'signaling';
             break;
+        case actionTypes.PEERING_SWITCH_INITIATOR:
+            console.log(`Client ${action.client.id} suggests switching initiator with ${action.receivingPeer}`);
+            action.client.status = 'sentCandidatePeer';
+            server.clientsById.get(action.receivingPeer).status = 'sentCandidatePeer';
+            action.client.connection.sendUTF(JSON.stringify({
+                type: actionTypes.CANDIDATE_PEER,
+                initiator: false,
+                peerId: action.receivingPeer
+            }));
+            server.clientsById.get(action.receivingPeer).connection.sendUTF(JSON.stringify({
+                type: actionTypes.CANDIDATE_PEER,
+                initiator: true,
+                peerId: action.client.id
+            }));
+            break;
         case actionTypes.RELAY_SIGNAL:
             console.log(`Client ${action.client.id} sharing signaling with ${action.receivingPeer}`);
             action.client.status = 'signaling';
@@ -160,6 +175,9 @@ const serverAction = server => action => {
             action.client.status = 'requestingPeer';
             action.client.signalingData = [];
             action.client.unreachable.add(action.peerId);
+            server.clientsById.get(action.peerId).status = 'requestingPeer';
+            server.clientsById.get(action.peerId).signalingData = [];
+            server.clientsById.get(action.peerId).unreachable.add(action.client.id);
             peerMatching(server);
             break;
         default:
